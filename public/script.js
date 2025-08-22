@@ -1,421 +1,164 @@
-// Autosave config
-let lastConfig = {};
-let lastAnswers = {};
-function saveConfig() {
-  const config = {
-    book: document.getElementById('bookName').value,
-    chapters: document.getElementById('chapters').value,
-    ageRange: document.getElementById('ageRange').value,
-    useGeneric: document.getElementById('useGeneric').checked
-  };
-  localStorage.setItem('quizConfig', JSON.stringify(config));
-  lastConfig = { ...config };
-}
+require('dotenv').config();
+const express = require('express');
+const bodyParser = require('body-parser');
+const OpenAI = require('openai');
 
-function loadConfig() {
-  const saved = localStorage.getItem('quizConfig');
-  if (saved) {
-    const config = JSON.parse(saved);
-    document.getElementById('bookName').value = config.book || '';
-    document.getElementById('chapters').value = config.chapters || 'all';
-    document.getElementById('ageRange').value = config.ageRange || '';
-    document.getElementById('useGeneric').checked = config.useGeneric || false;
-    lastConfig = { ...config };
-  }
-}
+const app = express();
+const port = process.env.PORT || 3000;
 
-function showStatus(message, color = '#6c757d') {
-  const status = document.getElementById('autosaveStatus');
-  status.textContent = message;
-  status.style.color = color;
-  status.style.display = 'block';
-  setTimeout(() => { status.style.display = 'none'; }, 2000);
-}
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Periodic autosave
-function startAutosave() {
-  setInterval(() => {
-    // Autosave config (1st page)
-    if (document.getElementById('inputSection').style.display !== 'none') {
-      const currentConfig = {
-        book: document.getElementById('bookName').value,
-        chapters: document.getElementById('chapters').value,
-        ageRange: document.getElementById('ageRange').value,
-        useGeneric: document.getElementById('useGeneric').checked
-      };
-      if (JSON.stringify(currentConfig) !== JSON.stringify(lastConfig)) {
-        saveConfig();
-      }
-    }
-    // Autosave answers (2nd page)
-    if (document.getElementById('quizSection').style.display !== 'none') {
-      const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
-      if (savedQuiz) {
-        const currentAnswers = {};
-        for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
-          const selected = document.querySelector(`input[name="mcq${i}"]:checked`);
-          currentAnswers[`mcq${i}`] = selected ? selected.value : '';
-        }
-        for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
-          currentAnswers[`open${i}`] = document.getElementById(`open${i}`).value;
-        }
-        if (JSON.stringify(currentAnswers) !== JSON.stringify(lastAnswers)) {
-          saveAnswers();
-        }
-      }
-    }
-  }, 30000); // Every 30 seconds
-}
+app.use(bodyParser.json());
+app.use(express.static('public'));
 
-// Loading screen functions
-function showLoading(message) {
-  const loadingScreen = document.getElementById('loadingScreen');
-  const loadingMessage = document.getElementById('loadingMessage');
-  loadingMessage.textContent = message;
-  loadingScreen.style.display = 'flex';
-  document.getElementById('inputSection').style.display = 'none';
-  document.getElementById('quizSection').style.display = 'none';
-  document.getElementById('results').style.display = 'none';
-}
+// Endpoint to generate quiz questions using OpenAI
+app.post('/generate', async (req, res) => {
+  const { book, chapters, ageRange, useGeneric } = req.body;
 
-function hideLoading() {
-  document.getElementById('loadingScreen').style.display = 'none';
-}
-
-// Fetch book cover
-async function getBookCover(bookName, ageRange, useGeneric) {
-  if (useGeneric) {
-    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback' };
-  }
   try {
-    const encodedTitle = encodeURIComponent(bookName.trim().replace(/\s+/g, '+'));
-    const response = await fetch(`https://covers.openlibrary.org/b/title/${encodedTitle}-M.jpg`);
-    if (response.ok && response.headers.get('content-type').includes('image')) {
-      return { url: response.url, type: 'cover' };
+    let prompt;
+    let isBookKnown = true;
+
+    if (!useGeneric) {
+      // Step 1: Check if the book is known
+      const validationPrompt = `Is the book "${book}" a known published book? Respond with JSON: {"isKnown": boolean, "message": "string"}`;
+      const validationCompletion = await openai.chat.completions.create({
+        model: 'gpt-5-nano',
+        messages: [{ role: 'user', content: validationPrompt }],
+      });
+      const validationResult = JSON.parse(validationCompletion.choices[0].message.content);
+
+      if (!validationResult.isKnown) {
+        isBookKnown = false;
+        prompt = `The book "${book}" was not found. Generate a generic literature quiz suitable for age range ${ageRange}, not tied to a specific book.
+- Create 6 multiple-choice questions (MCQs) about general reading comprehension, literary themes, or story elements (e.g., plot, characters, setting, themes).
+- Each MCQ should have a question, 4 options (a, b, c, d), and specify the correct answer letter.
+- Create 4 open-ended questions for written responses about general literature concepts (e.g., analyzing themes, character motivations).
+- For each open-ended question, provide the question and a list of key points for evaluation.
+- Adjust difficulty and language to be appropriate for the age range.
+- Respond ONLY in JSON format: {
+  "mcqs": [{"question": "str", "options": {"a": "str", "b": "str", "c": "str", "d": "str"}, "correct": "letter"} ...],
+  "openEnded": [{"question": "str", "keyPoints": ["point1", "point2", ...]} ...],
+  "warning": "Book '${book}' not found, using generic questions."
+}`;
+      } else {
+        prompt = `Generate a quiz for the book "${book}" covering ${chapters === 'all' ? 'all chapters' : `chapters ${chapters}`}, suitable for age range ${ageRange}.
+- Create 6 multiple-choice questions (MCQs). Each MCQ should have a question, 4 options (a, b, c, d), and specify the correct answer letter.
+- Create 4 open-ended questions for written responses. For each, provide the question and a list of key points for evaluation.
+- Adjust difficulty and language to be appropriate for the age range.
+- Respond ONLY in JSON format: {
+  "mcqs": [{"question": "str", "options": {"a": "str", "b": "str", "c": "str", "d": "str"}, "correct": "letter"} ...],
+  "openEnded": [{"question": "str", "keyPoints": ["point1", "point2", ...]} ...]
+}`;
+      }
+    } else {
+      prompt = `Generate a generic literature quiz suitable for age range ${ageRange}, not tied to a specific book.
+- Create 6 multiple-choice questions (MCQs) about general reading comprehension, literary themes, or story elements (e.g., plot, characters, setting, themes).
+- Each MCQ should have a question, 4 options (a, b, c, d), and specify the correct answer letter.
+- Create 4 open-ended questions for written responses about general literature concepts (e.g., analyzing themes, character motivations).
+- For each open-ended question, provide the question and a list of key points for evaluation.
+- Adjust difficulty and language to be appropriate for the age range.
+- Respond ONLY in JSON format: {
+  "mcqs": [{"question": "str", "options": {"a": "str", "b": "str", "c": "str", "d": "str"}, "correct": "letter"} ...],
+  "openEnded": [{"question": "str", "keyPoints": ["point1", "point2", ...]} ...]
+}`;
     }
-    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback', warning: `Book cover not found for "${bookName}", using generic background.` };
-  } catch (error) {
-    console.error('Book cover fetch error:', error.message);
-    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback', warning: `Book cover not found for "${bookName}", using generic background.` };
-  }
-}
 
-function getAgeAppropriateBackground(ageRange) {
-  switch (ageRange) {
-    case '5-7':
-      return 'https://source.unsplash.com/800x600/?books,children';
-    case '8-10':
-      return 'https://source.unsplash.com/800x600/?adventure,books';
-    case '11-13':
-      return 'https://source.unsplash.com/800x600/?literature,teen';
-    case '14+':
-      return 'https://source.unsplash.com/800x600/?literature,classic';
-    default:
-      return 'https://source.unsplash.com/800x600/?books';
-  }
-}
-
-// Speech recognition setup
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let activeMic = null;
-
-if (SpeechRecognition) {
-  recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.interimResults = true;
-  recognition.continuous = true;
-
-  recognition.onresult = function(event) {
-    if (activeMic) {
-      const textarea = document.getElementById(`open${activeMic}`);
-      const transcript = Array.from(event.results)
-        .map(result => result[0].transcript)
-        .join('');
-      textarea.value = transcript;
-      saveAnswers();
-    }
-  };
-
-  recognition.onerror = function(event) {
-    console.error('Speech recognition error:', event.error);
-    if (activeMic) {
-      const btn = document.getElementById(`micBtn${activeMic}`);
-      btn.textContent = '🎤 Start Speaking';
-      btn.classList.remove('recording');
-      activeMic = null;
-      showStatus('Speech recognition failed. Try again.', '#dc3545');
-    }
-  };
-
-  recognition.onend = function() {
-    if (activeMic) {
-      const btn = document.getElementById(`micBtn${activeMic}`);
-      btn.textContent = '🎤 Start Speaking';
-      btn.classList.remove('recording');
-      activeMic = null;
-    }
-  };
-}
-
-// Generate quiz
-document.getElementById('inputForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const book = document.getElementById('bookName').value;
-  const chapters = document.getElementById('chapters').value.toLowerCase();
-  const ageRange = document.getElementById('ageRange').value;
-  const useGeneric = document.getElementById('useGeneric').checked;
-
-  if (!ageRange) return alert('Please select an age range.');
-  if (!useGeneric && !book) return alert('Please enter a book name or select generic questions.');
-
-  showLoading('Generating quiz...');
-  try {
-    const { url: backgroundUrl, type: backgroundType, warning: backgroundWarning } = await getBookCover(book, ageRange, useGeneric);
-    const res = await fetch('/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ book, chapters, ageRange, useGeneric })
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-5-nano', // Using GPT-5 Nano
+      messages: [{ role: 'user', content: prompt }],
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-
-    localStorage.setItem('generatedQuiz', JSON.stringify({ 
-      mcqs: data.mcqs, 
-      openEnded: data.openEnded, 
-      ageRange, 
-      isBookKnown: data.isBookKnown,
-      backgroundUrl,
-      backgroundType,
-      backgroundWarning
-    }));
-
-    renderQuiz(data.mcqs, data.openEnded, data.warning, backgroundUrl, backgroundType, backgroundWarning);
-    hideLoading();
-    document.getElementById('inputSection').style.display = 'none';
-    document.getElementById('quizSection').style.display = 'block';
+    const generated = JSON.parse(completion.choices[0].message.content);
+    generated.isBookKnown = isBookKnown; // Add flag for frontend
+    res.json(generated);
   } catch (error) {
-    hideLoading();
-    showStatus(`Failed to generate quiz: ${error.message}`, '#dc3545');
+    console.error('Quiz generation error:', error.message);
+    res.status(500).json({ error: `Failed to generate quiz. Ensure GPT-5 Nano is available or check your API key.` });
   }
 });
 
-// Render quiz
-function renderQuiz(mcqs, openEnded, bookWarning, backgroundUrl, backgroundType, backgroundWarning) {
-  const mcqContainer = document.getElementById('mcqContainer');
-  const openContainer = document.getElementById('openContainer');
-  const quizSection = document.getElementById('quizSection');
-  mcqContainer.innerHTML = '';
-  openContainer.innerHTML = '';
+// Endpoint for quiz submission and scoring
+app.post('/submit', async (req, res) => {
+  const { mcqs, openEnded, answers, ageRange } = req.body;
+  let score = 0;
+  let feedbackHtml = '';
+  const mcqPoints = 1; // Each MCQ worth 1 point, total possible MCQ: 6
+  const openPoints = 10; // Each open-ended out of 10, total possible open: 40
+  const totalPossible = (mcqs.length * mcqPoints) + (openEnded.length * openPoints);
 
-  quizSection.style.backgroundImage = `url(${backgroundUrl})`;
-  if (bookWarning) {
-    mcqContainer.innerHTML += `<div class="alert alert-warning animate__animated animate__fadeIn">${bookWarning}</div>`;
-  }
-  if (backgroundWarning && backgroundType === 'fallback') {
-    mcqContainer.innerHTML += `<div class="alert alert-info animate__animated animate__fadeIn">${backgroundWarning}</div>`;
-  }
-
+  // Score MCQs
   mcqs.forEach((mcq, index) => {
     const qNum = index + 1;
-    let html = `<div class="question"><p><strong>${qNum}. ${mcq.question}</strong></p>`;
-    for (const opt in mcq.options) {
-      html += `<div class="form-check"><input class="form-check-input" type="radio" name="mcq${qNum}" value="${opt}" id="mcq${qNum}${opt}"><label class="form-check-label" for="mcq${qNum}${opt}">${opt}) ${mcq.options[opt]}</label></div>`;
+    const selected = answers[`mcq${qNum}`];
+    if (selected === mcq.correct) {
+      score += mcqPoints;
+      feedbackHtml += `<p class="correct animate__animated animate__bounceIn">Question ${qNum} (MCQ): Correct!</p>`;
+    } else {
+      feedbackHtml += `<p class="incorrect animate__animated animate__shakeX">Question ${qNum} (MCQ): Incorrect. Correct is ${mcq.correct.toUpperCase()}.</p>`;
     }
-    html += `</div>`;
-    mcqContainer.innerHTML += html;
   });
 
-  openEnded.forEach((open, index) => {
-    const qNum = mcqs.length + index + 1;
-    const html = `<div class="question"><p><strong>${qNum}. ${open.question} (Write or speak your answer)</strong></p><textarea id="open${index + 1}"></textarea><button type="button" class="mic-btn" id="micBtn${qNum}">🎤 Start Speaking</button></div>`;
-    openContainer.innerHTML += html;
-  });
+  // Batch evaluate open-ended questions
+  const evalPrompts = openEnded.map((open, i) => {
+    const qNum = mcqs.length + i + 1;
+    const response = answers[`open${i + 1}`] || '';
+    return {
+      qNum,
+      question: open.question,
+      keyPoints: open.keyPoints,
+      response
+    };
+  }).filter(item => item.response.trim() !== '').map(item => `
+Evaluate the student's response to: "${item.question}" for age range ${ageRange}.
+Key points to cover: ${item.keyPoints.join(', ')}.
+Score out of 10 (considering age-appropriate understanding, completeness, and accuracy). Provide brief feedback.
+Return result as: {"qNum": ${item.qNum}, "score": number, "feedback": "string"}
+`);
 
-  setupAutosaveAnswers(mcqs.length, openEnded.length);
-  setupMicButtons(mcqs.length, openEnded.length);
-  loadAnswers();
-}
+  if (evalPrompts.length > 0) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-5-nano',
+        messages: [{ role: 'user', content: `Evaluate the following responses:\n${evalPrompts.join('\n')}\nRespond with JSON array: [{qNum, score, feedback}, ...]` }],
+      });
+      const results = JSON.parse(completion.choices[0].message.content);
 
-// Autosave answers
-function setupAutosaveAnswers(numMcq, numOpen) {
-  const form = document.getElementById('quizForm');
-  form.querySelectorAll('input[type="radio"]').forEach(radio => radio.addEventListener('change', saveAnswers));
-  let debounce;
-  form.querySelectorAll('textarea').forEach(textarea => {
-    textarea.addEventListener('input', () => {
-      clearTimeout(debounce);
-      debounce = setTimeout(saveAnswers, 500);
-    });
-  });
-}
-
-function saveAnswers() {
-  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
-  if (!savedQuiz) return;
-
-  const answers = {};
-  for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
-    const selected = document.querySelector(`input[name="mcq${i}"]:checked`);
-    answers[`mcq${i}`] = selected ? selected.value : '';
-  }
-  for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
-    answers[`open${i}`] = document.getElementById(`open${i}`).value;
-  }
-  localStorage.setItem('quizAnswers', JSON.stringify(answers));
-  lastAnswers = { ...answers };
-}
-
-function loadAnswers() {
-  const saved = localStorage.getItem('quizAnswers');
-  if (saved) {
-    const answers = JSON.parse(saved);
-    Object.keys(answers).forEach(key => {
-      if (key.startsWith('mcq')) {
-        const radio = document.querySelector(`input[name="${key}"][value="${answers[key]}"]`);
-        if (radio) radio.checked = true;
-      } else if (key.startsWith('open')) {
-        const textarea = document.getElementById(key);
-        if (textarea) textarea.value = answers[key];
-      }
-    });
-    lastAnswers = { ...answers };
-  }
-}
-
-// Mic setup
-function setupMicButtons(numMcq, numOpen) {
-  if (!SpeechRecognition) {
-    for (let i = 1; i <= numOpen; i++) {
-      const qNum = numMcq + i;
-      const btn = document.getElementById(`micBtn${qNum}`);
-      btn.disabled = true;
-      btn.textContent = '🎤 Not Supported';
-      btn.style.backgroundColor = '#6c757d';
-    }
-    return;
-  }
-
-  for (let i = 1; i <= numOpen; i++) {
-    const qNum = numMcq + i;
-    const btn = document.getElementById(`micBtn${qNum}`);
-    btn.addEventListener('click', () => {
-      if (activeMic === i.toString()) {
-        recognition.stop();
-        btn.textContent = '🎤 Start Speaking';
-        btn.classList.remove('recording');
-        activeMic = null;
-      } else {
-        if (activeMic) {
-          recognition.stop();
-          const prevBtn = document.getElementById(`micBtn${numMcq + parseInt(activeMic)}`);
-          prevBtn.textContent = '🎤 Start Speaking';
-          prevBtn.classList.remove('recording');
+      // Process results in order
+      for (let i = 0; i < openEnded.length; i++) {
+        const qNum = mcqs.length + i + 1;
+        const response = answers[`open${i + 1}`] || '';
+        if (response.trim() === '') {
+          feedbackHtml += `<p>Question ${qNum} (Open): <span class="incorrect">Score: 0/10</span></p><div class="feedback animate__animated animate__fadeIn">No response provided.</div>`;
+          continue;
         }
-        activeMic = i.toString();
-        btn.textContent = '🎤 Stop Speaking';
-        btn.classList.add('recording');
-        recognition.start();
+
+        const result = results.find(r => r.qNum === qNum);
+        if (result) {
+          score += result.score;
+          const className = result.score >= 5 ? 'correct' : 'incorrect';
+          feedbackHtml += `<p>Question ${qNum} (Open): <span class="${className}">Score: ${result.score}/10</span></p><div class="feedback animate__animated animate__fadeIn">${result.feedback}</div>`;
+        } else {
+          feedbackHtml += `<p>Question ${qNum} (Open): <span class="incorrect">Score: 0/10</span></p><div class="feedback animate__animated animate__fadeIn">Error evaluating response.</div>`;
+        }
       }
-    });
-  }
-}
-
-// Submit quiz
-document.getElementById('quizForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (activeMic) {
-    recognition.stop();
-    const btn = document.getElementById(`micBtn${activeMic}`);
-    btn.textContent = '🎤 Start Speaking';
-    btn.classList.remove('recording');
-    activeMic = null;
-  }
-
-  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
-  if (!savedQuiz) return alert('No quiz generated.');
-
-  const answers = {};
-  for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
-    answers[`mcq${i}`] = document.querySelector(`input[name="mcq${i}"]:checked`)?.value || '';
-  }
-  for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
-    answers[`open${i}`] = document.getElementById(`open${i}`).value;
+    } catch (error) {
+      console.error('Batch evaluation error:', error.message);
+      for (let i = 0; i < openEnded.length; i++) {
+        const qNum = mcqs.length + i + 1;
+        feedbackHtml += `<p>Question ${qNum} (Open): <span class="incorrect">Score: 0/10</span></p><div class="feedback animate__animated animate__fadeIn">Error evaluating response. Ensure GPT-5 Nano is available.</div>`;
+      }
+    }
+  } else {
+    for (let i = 0; i < openEnded.length; i++) {
+      const qNum = mcqs.length + i + 1;
+      feedbackHtml += `<p>Question ${qNum} (Open): <span class="incorrect">Score: 0/10</span></p><div class="feedback animate__animated animate__fadeIn">No response provided.</div>`;
+    }
   }
 
-  showLoading('Evaluating answers...');
-  try {
-    const res = await fetch('/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcqs: savedQuiz.mcqs, openEnded: savedQuiz.openEnded, answers, ageRange: savedQuiz.ageRange })
-    });
-    const data = await res.json();
-    hideLoading();
-    document.getElementById('feedback').innerHTML = data.feedback;
-    document.getElementById('score').innerHTML = `<strong>${data.score}</strong>`;
-    document.getElementById('results').style.backgroundImage = `url(${savedQuiz.backgroundUrl})`;
-    document.getElementById('results').style.display = 'block';
-    document.getElementById('quizSection').style.display = 'none';
-    localStorage.removeItem('quizAnswers');
-  } catch (error) {
-    hideLoading();
-    showStatus('Failed to submit quiz.', '#dc3545');
-  }
+  const percentage = ((score / totalPossible) * 100).toFixed(0);
+  res.json({ feedback: feedbackHtml, score: `Total Score: ${score}/${totalPossible} (${percentage}%)` });
 });
 
-// Reset quiz answers
-document.getElementById('resetQuizBtn').addEventListener('click', () => {
-  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
-  if (!savedQuiz) return alert('No quiz to reset.');
-  document.querySelectorAll('input[type="radio"]').forEach(radio => radio.checked = false);
-  document.querySelectorAll('textarea').forEach(textarea => textarea.value = '');
-  localStorage.removeItem('quizAnswers');
-  lastAnswers = {};
-  showStatus('Quiz answers reset.');
-});
-
-// Back to search
-document.getElementById('backBtn').addEventListener('click', () => {
-  localStorage.removeItem('generatedQuiz');
-  localStorage.removeItem('quizAnswers');
-  document.getElementById('inputSection').style.display = 'block';
-  document.getElementById('quizSection').style.display = 'none';
-  document.getElementById('results').style.display = 'none';
-  hideLoading();
-  showStatus('Returned to search.');
-});
-
-// Start new quiz
-document.getElementById('startNewBtn').addEventListener('click', () => {
-  localStorage.removeItem('generatedQuiz');
-  localStorage.removeItem('quizAnswers');
-  document.getElementById('inputSection').style.display = 'block';
-  document.getElementById('quizSection').style.display = 'none';
-  document.getElementById('results').style.display = 'none';
-  hideLoading();
-  showStatus('Ready for new quiz.');
-});
-
-// On load
-document.addEventListener('DOMContentLoaded', () => {
-  loadConfig();
-  const inputs = document.querySelectorAll('#inputForm input, #inputForm select');
-  inputs.forEach(input => input.addEventListener('input', saveConfig));
-  const savedQuiz = localStorage.getItem('generatedQuiz');
-  if (savedQuiz) {
-    const data = JSON.parse(savedQuiz);
-    renderQuiz(
-      data.mcqs, 
-      data.openEnded, 
-      data.isBookKnown ? null : `Book not found, using generic questions.`,
-      data.backgroundUrl,
-      data.backgroundType,
-      data.backgroundWarning
-    );
-    document.getElementById('inputSection').style.display = 'none';
-    document.getElementById('quizSection').style.display = 'block';
-    loadAnswers();
-  }
-  startAutosave();
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
