@@ -28,6 +28,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
       body: JSON.stringify({ book, chapters, ageRange, useGeneric })
     });
     console.log('Fetch response status:', res.status);
+    if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
@@ -35,7 +36,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
       mcqs: data.mcqs, 
       openEnded: data.openEnded, 
       ageRange, 
-      isBookKnown: data.isBookKnown,
+      isBookKnown: data.isBookKnown || true,
       backgroundUrl,
       backgroundType,
       backgroundWarning
@@ -206,7 +207,6 @@ function showAlert(type, message, autoHide) {
   }
 }
 
-// Auto-save configuration every 30 seconds silently
 let saveTimeout;
 function saveConfig() {
   clearTimeout(saveTimeout);
@@ -225,7 +225,6 @@ document.getElementById('chapters').addEventListener('input', saveConfig);
 document.getElementById('ageRange').addEventListener('change', saveConfig);
 document.getElementById('useGeneric').addEventListener('change', saveConfig);
 
-// Load saved configuration on page load
 window.addEventListener('load', () => {
   const savedConfig = localStorage.getItem('quizConfig');
   if (savedConfig) {
