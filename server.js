@@ -65,11 +65,11 @@ app.post('/generate', async (req, res) => {
     }
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-5-nano', // Using GPT-5 Nano
+      model: 'gpt-5-nano',
       messages: [{ role: 'user', content: prompt }],
     });
     const generated = JSON.parse(completion.choices[0].message.content);
-    generated.isBookKnown = isBookKnown; // Add flag for frontend
+    generated.isBookKnown = isBookKnown;
     res.json(generated);
   } catch (error) {
     console.error('Quiz generation error:', error.message);
@@ -82,11 +82,10 @@ app.post('/submit', async (req, res) => {
   const { mcqs, openEnded, answers, ageRange } = req.body;
   let score = 0;
   let feedbackHtml = '';
-  const mcqPoints = 1; // Each MCQ worth 1 point, total possible MCQ: 6
-  const openPoints = 10; // Each open-ended out of 10, total possible open: 40
+  const mcqPoints = 1;
+  const openPoints = 10;
   const totalPossible = (mcqs.length * mcqPoints) + (openEnded.length * openPoints);
 
-  // Score MCQs
   mcqs.forEach((mcq, index) => {
     const qNum = index + 1;
     const selected = answers[`mcq${qNum}`];
@@ -98,7 +97,6 @@ app.post('/submit', async (req, res) => {
     }
   });
 
-  // Batch evaluate open-ended questions
   const evalPrompts = openEnded.map((open, i) => {
     const qNum = mcqs.length + i + 1;
     const response = answers[`open${i + 1}`] || '';
@@ -123,7 +121,6 @@ Return result as: {"qNum": ${item.qNum}, "score": number, "feedback": "string"}
       });
       const results = JSON.parse(completion.choices[0].message.content);
 
-      // Process results in order
       for (let i = 0; i < openEnded.length; i++) {
         const qNum = mcqs.length + i + 1;
         const response = answers[`open${i + 1}`] || '';
