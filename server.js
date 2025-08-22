@@ -11,22 +11,23 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// Endpoint to generate quiz questions using OpenAI
 app.post('/generate', async (req, res) => {
   const { book, chapters, ageRange, useGeneric } = req.body;
+
+  console.log('Received generate request:', { book, chapters, ageRange, useGeneric });
 
   try {
     let prompt;
     let isBookKnown = true;
 
     if (!useGeneric) {
-      // Step 1: Check if the book is known
       const validationPrompt = `Is the book "${book}" a known published book? Respond with JSON: {"isKnown": boolean, "message": "string"}`;
       const validationCompletion = await openai.chat.completions.create({
         model: 'gpt-5-nano',
         messages: [{ role: 'user', content: validationPrompt }],
       });
       const validationResult = JSON.parse(validationCompletion.choices[0].message.content);
+      console.log('Book validation result:', validationResult);
 
       if (!validationResult.isKnown) {
         isBookKnown = false;
@@ -64,20 +65,21 @@ app.post('/generate', async (req, res) => {
 }`;
     }
 
+    console.log('Sending prompt to OpenAI:', prompt);
     const completion = await openai.chat.completions.create({
       model: 'gpt-5-nano',
       messages: [{ role: 'user', content: prompt }],
     });
     const generated = JSON.parse(completion.choices[0].message.content);
     generated.isBookKnown = isBookKnown;
+    console.log('Generated quiz data:', generated);
     res.json(generated);
   } catch (error) {
     console.error('Quiz generation error:', error.message);
-    res.status(500).json({ error: `Failed to generate quiz. Ensure GPT-5 Nano is available or check your API key.` });
+    res.status(500).json({ error: `Failed to generate quiz: ${error.message}. Check your OpenAI API key or model availability.` });
   }
 });
 
-// Endpoint for quiz submission and scoring
 app.post('/submit', async (req, res) => {
   const { mcqs, openEnded, answers, ageRange } = req.body;
   let score = 0;
