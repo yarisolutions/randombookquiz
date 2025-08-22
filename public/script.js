@@ -1,34 +1,22 @@
 document.getElementById('inputForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  console.log('Form submitted, preventing default behavior');
 
-  const book = document.getElementById('bookName').value.trim();
-  const chapters = document.getElementById('chapters').value.toLowerCase().trim();
+  const book = document.getElementById('bookName').value;
+  const chapters = document.getElementById('chapters').value.toLowerCase();
   const ageRange = document.getElementById('ageRange').value;
   const useGeneric = document.getElementById('useGeneric').checked;
 
-  console.log('Form data:', { book, chapters, ageRange, useGeneric });
-
-  if (!ageRange) {
-    alert('Please select an age range.');
-    return;
-  }
-  if (!useGeneric && !book) {
-    alert('Please enter a book name or select generic questions.');
-    return;
-  }
+  if (!ageRange) return alert('Please select an age range.');
+  if (!useGeneric && !book) return alert('Please enter a book name or select generic questions.');
 
   showLoading('Generating quiz...');
   try {
-    console.log('Sending fetch request to /generate');
     const { url: backgroundUrl, type: backgroundType, warning: backgroundWarning } = await getBookCover(book, ageRange, useGeneric);
     const res = await fetch('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book, chapters, ageRange, useGeneric })
     });
-    console.log('Fetch response status:', res.status);
-    if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
@@ -36,7 +24,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
       mcqs: data.mcqs, 
       openEnded: data.openEnded, 
       ageRange, 
-      isBookKnown: data.isBookKnown || true,
+      isBookKnown: data.isBookKnown,
       backgroundUrl,
       backgroundType,
       backgroundWarning
@@ -47,7 +35,6 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
     document.getElementById('inputSection').style.display = 'none';
     document.getElementById('quizSection').style.display = 'block';
   } catch (error) {
-    console.error('Generate quiz error:', error);
     hideLoading();
     showStatus(`Failed to generate quiz: ${error.message}`, '#dc3545');
   }

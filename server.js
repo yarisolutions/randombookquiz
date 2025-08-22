@@ -14,8 +14,6 @@ app.use(express.static('public'));
 app.post('/generate', async (req, res) => {
   const { book, chapters, ageRange, useGeneric } = req.body;
 
-  console.log('Received generate request:', { book, chapters, ageRange, useGeneric });
-
   try {
     let prompt;
     let isBookKnown = true;
@@ -27,7 +25,6 @@ app.post('/generate', async (req, res) => {
         messages: [{ role: 'user', content: validationPrompt }],
       });
       const validationResult = JSON.parse(validationCompletion.choices[0].message.content);
-      console.log('Book validation result:', validationResult);
 
       if (!validationResult.isKnown) {
         isBookKnown = false;
@@ -65,18 +62,16 @@ app.post('/generate', async (req, res) => {
 }`;
     }
 
-    console.log('Sending prompt to OpenAI:', prompt);
     const completion = await openai.chat.completions.create({
       model: 'gpt-5-nano',
       messages: [{ role: 'user', content: prompt }],
     });
     const generated = JSON.parse(completion.choices[0].message.content);
     generated.isBookKnown = isBookKnown;
-    console.log('Generated quiz data:', generated);
     res.json(generated);
   } catch (error) {
     console.error('Quiz generation error:', error.message);
-    res.status(500).json({ error: `Failed to generate quiz: ${error.message}. Check your OpenAI API key or model availability.` });
+    res.status(500).json({ error: `Failed to generate quiz. Ensure GPT-5 Nano is available or check your API key.` });
   }
 });
 
