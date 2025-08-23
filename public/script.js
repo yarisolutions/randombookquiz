@@ -10,7 +10,6 @@ function saveConfig() {
   };
   localStorage.setItem('quizConfig', JSON.stringify(config));
   lastConfig = { ...config };
-  showStatus('Config saved!');
 }
 
 function loadConfig() {
@@ -86,16 +85,18 @@ function hideLoading() {
 // Fetch book cover
 async function getBookCover(bookName, ageRange, useGeneric) {
   if (useGeneric) {
-    return getAgeAppropriateBackground(ageRange);
+    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback' };
   }
   try {
-    const response = await fetch(`http://covers.openlibrary.org/b/title/${encodeURIComponent(bookName)}-M.jpg`);
-    if (response.ok) {
-      return response.url;
+    const encodedTitle = encodeURIComponent(bookName.trim().replace(/\s+/g, '+'));
+    const response = await fetch(`https://covers.openlibrary.org/b/title/${encodedTitle}-M.jpg`);
+    if (response.ok && response.headers.get('content-type').includes('image')) {
+      return { url: response.url, type: 'cover' };
     }
-    return getAgeAppropriateBackground(ageRange);
-  } catch {
-    return getAgeAppropriateBackground(ageRange);
+    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback', warning: `Book cover not found for "${bookName}", using generic background.` };
+  } catch (error) {
+    console.error('Book cover fetch error:', error.message);
+    return { url: getAgeAppropriateBackground(ageRange), type: 'fallback', warning: `Book cover not found for "${bookName}", using generic background.` };
   }
 }
 
@@ -170,7 +171,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
 
   showLoading('Generating quiz...');
   try {
-    const backgroundUrl = await getBookCover(book, ageRange, useGeneric);
+    const { url: backgroundUrl, type: backgroundType, warning: backgroundWarning } = await getBookCover(book, ageRange, useGeneric);
     const res = await fetch('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -184,10 +185,12 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
       openEnded: data.openEnded, 
       ageRange, 
       isBookKnown: data.isBookKnown,
-      backgroundUrl 
+      backgroundUrl,
+      backgroundType,
+      backgroundWarning
     }));
 
-    renderQuiz(data.mcqs, data.openEnded, data.warning, backgroundUrl);
+    renderQuiz(data.mcqs, data.openEnded, data.warning, backgroundUrl, backgroundType, backgroundWarning);
     hideLoading();
     document.getElementById('inputSection').style.display = 'none';
     document.getElementById('quizSection').style.display = 'block';
@@ -198,7 +201,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
 });
 
 // Render quiz
-function renderQuiz(mcqs, openEnded, warning, backgroundUrl) {
+function renderQuiz(mcqs, openEnded, bookWarning, backgroundUrl, backgroundType, backgroundWarning) {
   const mcqContainer = document.getElementById('mcqContainer');
   const openContainer = document.getElementById('openContainer');
   const quizSection = document.getElementById('quizSection');
@@ -206,8 +209,11 @@ function renderQuiz(mcqs, openEnded, warning, backgroundUrl) {
   openContainer.innerHTML = '';
 
   quizSection.style.backgroundImage = `url(${backgroundUrl})`;
-  if (warning) {
-    mcqContainer.innerHTML = `<div class="alert alert-warning animate__animated animate__fadeIn">${warning}</div>`;
+  if (bookWarning) {
+    mcqContainer.innerHTML += `<div class="alert alert-warning animate__animated animate__fadeIn">${bookWarning}</div>`;
+  }
+  if (backgroundWarning && backgroundType === 'fallback') {
+    mcqContainer.innerHTML += `<div class="alert alert-info animate__animated animate__fadeIn">${backgroundWarning}</div>`;
   }
 
   mcqs.forEach((mcq, index) => {
@@ -258,7 +264,6 @@ function saveAnswers() {
   }
   localStorage.setItem('quizAnswers', JSON.stringify(answers));
   lastAnswers = { ...answers };
-  showStatus('Answers saved!');
 }
 
 function loadAnswers() {
@@ -400,7 +405,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const savedQuiz = localStorage.getItem('generatedQuiz');
   if (savedQuiz) {
     const data = JSON.parse(savedQuiz);
-    renderQuiz(data.mcqs, data.openEnded, data.isBookKnown ? null : `Book not found, using generic questions.`, data.backgroundUrl);
+    renderQuiz(
+      data.mcqs, 
+      data.openEnded, 
+      data.isBookKnown ? null : `Book not found, using generic questions.`,
+      data.backgroundUrl,
+      data.backgroundType,
+      data.backgroundWarning
+    );
     document.getElementById('inputSection').style.display = 'none';
     document.getElementById('quizSection').style.display = 'block';
     loadAnswers();
