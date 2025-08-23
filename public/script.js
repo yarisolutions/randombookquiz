@@ -1,6 +1,165 @@
+// Autosave config
+let lastConfig = {};
+let lastAnswers = {};
+function saveConfig() {
+  const config = {
+    book: document.getElementById('bookName').value,
+    chapters: document.getElementById('chapters').value,
+    ageRange: document.getElementById('ageRange').value,
+    useGeneric: document.getElementById('useGeneric').checked
+  };
+  localStorage.setItem('quizConfig', JSON.stringify(config));
+  lastConfig = { ...config };
+  showStatus('Config saved!');
+}
+
+function loadConfig() {
+  const saved = localStorage.getItem('quizConfig');
+  if (saved) {
+    const config = JSON.parse(saved);
+    document.getElementById('bookName').value = config.book || '';
+    document.getElementById('chapters').value = config.chapters || 'all';
+    document.getElementById('ageRange').value = config.ageRange || '';
+    document.getElementById('useGeneric').checked = config.useGeneric || false;
+    lastConfig = { ...config };
+  }
+}
+
+function showStatus(message, color = '#6c757d') {
+  const status = document.getElementById('autosaveStatus');
+  status.textContent = message;
+  status.style.color = color;
+  status.style.display = 'block';
+  setTimeout(() => { status.style.display = 'none'; }, 2000);
+}
+
+// Periodic autosave
+function startAutosave() {
+  setInterval(() => {
+    // Autosave config (1st page)
+    if (document.getElementById('inputSection').style.display !== 'none') {
+      const currentConfig = {
+        book: document.getElementById('bookName').value,
+        chapters: document.getElementById('chapters').value,
+        ageRange: document.getElementById('ageRange').value,
+        useGeneric: document.getElementById('useGeneric').checked
+      };
+      if (JSON.stringify(currentConfig) !== JSON.stringify(lastConfig)) {
+        saveConfig();
+      }
+    }
+    // Autosave answers (2nd page)
+    if (document.getElementById('quizSection').style.display !== 'none') {
+      const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
+      if (savedQuiz) {
+        const currentAnswers = {};
+        for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
+          const selected = document.querySelector(`input[name="mcq${i}"]:checked`);
+          currentAnswers[`mcq${i}`] = selected ? selected.value : '';
+        }
+        for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
+          currentAnswers[`open${i}`] = document.getElementById(`open${i}`).value;
+        }
+        if (JSON.stringify(currentAnswers) !== JSON.stringify(lastAnswers)) {
+          saveAnswers();
+        }
+      }
+    }
+  }, 30000); // Every 30 seconds
+}
+
+// Loading screen functions
+function showLoading(message) {
+  const loadingScreen = document.getElementById('loadingScreen');
+  const loadingMessage = document.getElementById('loadingMessage');
+  loadingMessage.textContent = message;
+  loadingScreen.style.display = 'flex';
+  document.getElementById('inputSection').style.display = 'none';
+  document.getElementById('quizSection').style.display = 'none';
+  document.getElementById('results').style.display = 'none';
+}
+
+function hideLoading() {
+  document.getElementById('loadingScreen').style.display = 'none';
+}
+
+// Fetch book cover
+async function getBookCover(bookName, ageRange, useGeneric) {
+  if (useGeneric) {
+    return getAgeAppropriateBackground(ageRange);
+  }
+  try {
+    const response = await fetch(`http://covers.openlibrary.org/b/title/${encodeURIComponent(bookName)}-M.jpg`);
+    if (response.ok) {
+      return response.url;
+    }
+    return getAgeAppropriateBackground(ageRange);
+  } catch {
+    return getAgeAppropriateBackground(ageRange);
+  }
+}
+
+function getAgeAppropriateBackground(ageRange) {
+  switch (ageRange) {
+    case '5-7':
+      return 'https://source.unsplash.com/800x600/?books,children';
+    case '8-10':
+      return 'https://source.unsplash.com/800x600/?adventure,books';
+    case '11-13':
+      return 'https://source.unsplash.com/800x600/?literature,teen';
+    case '14+':
+      return 'https://source.unsplash.com/800x600/?literature,classic';
+    default:
+      return 'https://source.unsplash.com/800x600/?books';
+  }
+}
+
+// Speech recognition setup
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let activeMic = null;
+
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  recognition.onresult = function(event) {
+    if (activeMic) {
+      const textarea = document.getElementById(`open${activeMic}`);
+      const transcript = Array.from(event.results)
+        .map(result => result[0].transcript)
+        .join('');
+      textarea.value = transcript;
+      saveAnswers();
+    }
+  };
+
+  recognition.onerror = function(event) {
+    console.error('Speech recognition error:', event.error);
+    if (activeMic) {
+      const btn = document.getElementById(`micBtn${activeMic}`);
+      btn.textContent = '🎤 Start Speaking';
+      btn.classList.remove('recording');
+      activeMic = null;
+      showStatus('Speech recognition failed. Try again.', '#dc3545');
+    }
+  };
+
+  recognition.onend = function() {
+    if (activeMic) {
+      const btn = document.getElementById(`micBtn${activeMic}`);
+      btn.textContent = '🎤 Start Speaking';
+      btn.classList.remove('recording');
+      activeMic = null;
+    }
+  };
+}
+
+// Generate quiz
 document.getElementById('inputForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-
   const book = document.getElementById('bookName').value;
   const chapters = document.getElementById('chapters').value.toLowerCase();
   const ageRange = document.getElementById('ageRange').value;
@@ -11,7 +170,7 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
 
   showLoading('Generating quiz...');
   try {
-    const { url: backgroundUrl, type: backgroundType, warning: backgroundWarning } = await getBookCover(book, ageRange, useGeneric);
+    const backgroundUrl = await getBookCover(book, ageRange, useGeneric);
     const res = await fetch('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -25,12 +184,10 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
       openEnded: data.openEnded, 
       ageRange, 
       isBookKnown: data.isBookKnown,
-      backgroundUrl,
-      backgroundType,
-      backgroundWarning
+      backgroundUrl 
     }));
 
-    renderQuiz(data.mcqs, data.openEnded, data.warning, backgroundUrl, backgroundType, backgroundWarning);
+    renderQuiz(data.mcqs, data.openEnded, data.warning, backgroundUrl);
     hideLoading();
     document.getElementById('inputSection').style.display = 'none';
     document.getElementById('quizSection').style.display = 'block';
@@ -40,185 +197,213 @@ document.getElementById('inputForm').addEventListener('submit', async (e) => {
   }
 });
 
-document.getElementById('resetBtn').addEventListener('click', () => {
-  document.getElementById('inputForm').reset();
-  localStorage.removeItem('quizConfig');
-  showStatus('Form reset.', '#6c757d');
-});
+// Render quiz
+function renderQuiz(mcqs, openEnded, warning, backgroundUrl) {
+  const mcqContainer = document.getElementById('mcqContainer');
+  const openContainer = document.getElementById('openContainer');
+  const quizSection = document.getElementById('quizSection');
+  mcqContainer.innerHTML = '';
+  openContainer.innerHTML = '';
 
-document.getElementById('submitBtn').addEventListener('click', () => {
-  const answers = {};
-  document.querySelectorAll('input[type="radio"]:checked').forEach(radio => {
-    answers[radio.name] = radio.value;
-  });
-  document.querySelectorAll('textarea').forEach((textarea, i) => {
-    answers[`open${i + 1}`] = textarea.value;
-  });
-
-  const quizData = JSON.parse(localStorage.getItem('generatedQuiz'));
-  fetch('/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcqs: quizData.mcqs, openEnded: quizData.openEnded, answers, ageRange: quizData.ageRange })
-  })
-    .then(res => res.json())
-    .then(data => {
-      document.getElementById('resultsContent').innerHTML = data.feedback + '<p>' + data.score + '</p>';
-      document.getElementById('quizSection').style.display = 'none';
-      document.getElementById('resultsSection').style.display = 'block';
-    })
-    .catch(error => {
-      console.error('Submit error:', error);
-      showStatus('Failed to submit quiz.', '#dc3545');
-    });
-});
-
-document.getElementById('resetAnswersBtn').addEventListener('click', () => {
-  document.querySelectorAll('input[type="radio"]').forEach(radio => radio.checked = false);
-  document.querySelectorAll('textarea').forEach(textarea => textarea.value = '');
-  showStatus('Answers reset.', '#6c757d');
-});
-
-document.getElementById('backBtn').addEventListener('click', () => {
-  document.getElementById('quizSection').style.display = 'none';
-  document.getElementById('inputSection').style.display = 'block';
-});
-
-document.getElementById('newQuizBtn').addEventListener('click', () => {
-  document.getElementById('resultsSection').style.display = 'none';
-  document.getElementById('inputSection').style.display = 'block';
-  document.getElementById('inputForm').reset();
-  localStorage.removeItem('quizConfig');
-  localStorage.removeItem('generatedQuiz');
-  document.body.style.backgroundImage = '';
-  showStatus('Started new quiz.', '#6c757d');
-});
-
-function showLoading(message) {
-  const loading = document.getElementById('loading');
-  loading.textContent = message;
-  loading.style.display = 'block';
-}
-
-function hideLoading() {
-  document.getElementById('loading').style.display = 'none';
-}
-
-function showStatus(message, color) {
-  const status = document.getElementById('status');
-  status.textContent = message;
-  status.style.color = color;
-  status.classList.add('animate__animated', 'animate__fadeIn');
-  setTimeout(() => status.classList.remove('animate__fadeIn'), 1000);
-}
-
-function renderQuiz(mcqs, openEnded, warning, backgroundUrl, backgroundType, backgroundWarning) {
-  let html = '';
-  if (warning) showStatus(warning, '#ffc107');
-  if (backgroundWarning) showStatus(backgroundWarning, '#17a2b8');
+  quizSection.style.backgroundImage = `url(${backgroundUrl})`;
+  if (warning) {
+    mcqContainer.innerHTML = `<div class="alert alert-warning animate__animated animate__fadeIn">${warning}</div>`;
+  }
 
   mcqs.forEach((mcq, index) => {
-    html += `<p><strong>Question ${index + 1}:</strong> ${mcq.question}</p>`;
-    html += '<div class="options">';
-    for (const [key, value] of Object.entries(mcq.options)) {
-      html += `<div><input type="radio" id="mcq${index + 1}${key}" name="mcq${index + 1}" value="${key}">
-                <label for="mcq${index + 1}${key}">${key.toUpperCase()}: ${value}</label></div>`;
+    const qNum = index + 1;
+    let html = `<div class="question"><p><strong>${qNum}. ${mcq.question}</strong></p>`;
+    for (const opt in mcq.options) {
+      html += `<div class="form-check"><input class="form-check-input" type="radio" name="mcq${qNum}" value="${opt}" id="mcq${qNum}${opt}"><label class="form-check-label" for="mcq${qNum}${opt}">${opt}) ${mcq.options[opt]}</label></div>`;
     }
-    html += '</div>';
+    html += `</div>`;
+    mcqContainer.innerHTML += html;
   });
 
   openEnded.forEach((open, index) => {
-    html += `<p><strong>Question ${mcqs.length + index + 1}:</strong> ${open.question}</p>`;
-    html += `<textarea class="form-control mt-2" rows="3" placeholder="Write your answer here..."></textarea>`;
+    const qNum = mcqs.length + index + 1;
+    const html = `<div class="question"><p><strong>${qNum}. ${open.question} (Write or speak your answer)</strong></p><textarea id="open${index + 1}"></textarea><button type="button" class="mic-btn" id="micBtn${qNum}">🎤 Start Speaking</button></div>`;
+    openContainer.innerHTML += html;
   });
 
-  document.getElementById('quizContent').innerHTML = html;
-  if (backgroundUrl) {
-    document.body.style.backgroundImage = `url(${backgroundUrl})`;
-    document.body.classList.add(`background-${backgroundType}`);
-    document.body.classList.remove('alert-info', 'alert-warning');
-  }
+  setupAutosaveAnswers(mcqs.length, openEnded.length);
+  setupMicButtons(mcqs.length, openEnded.length);
+  loadAnswers();
 }
 
-function getBookCover(bookTitle, ageRange, useGeneric) {
-  return new Promise((resolve) => {
-    const coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(bookTitle)}-M.jpg`;
-    fetch(coverUrl)
-      .then(response => {
-        if (!response.ok) throw new Error('Cover not found');
-        return response.blob();
-      })
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        resolve({ url, type: 'cover', warning: '' });
-      })
-      .catch(error => {
-        console.error('Cover fetch error:', error);
-        const fallbackUrl = getAgeAppropriateBackground(ageRange);
-        fetch(`https://source.unsplash.com/1920x1080/?${fallbackUrl}`)
-          .then(response => {
-            if (!response.ok) throw new Error('Fallback image failed');
-            return response.blob();
-          })
-          .then(blob => {
-            const url = URL.createObjectURL(blob);
-            resolve({ url, type: 'fallback', warning: 'Book cover not available. Using a generic background.' });
-          })
-          .catch(fallbackError => {
-            console.error('Fallback error:', fallbackError);
-            resolve({ url: '', type: '', warning: 'Failed to load background image.' });
-          });
-      });
+// Autosave answers
+function setupAutosaveAnswers(numMcq, numOpen) {
+  const form = document.getElementById('quizForm');
+  form.querySelectorAll('input[type="radio"]').forEach(radio => radio.addEventListener('change', saveAnswers));
+  let debounce;
+  form.querySelectorAll('textarea').forEach(textarea => {
+    textarea.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(saveAnswers, 500);
+    });
   });
 }
 
-function getAgeAppropriateBackground(ageRange) {
-  const themes = {
-    '5-7': 'children+storybook',
-    '8-10': 'middle-grade+adventure',
-    '11-13': 'young-adult+fantasy',
-    '14+': 'teen+novel'
-  };
-  return themes[ageRange] || 'literature';
+function saveAnswers() {
+  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
+  if (!savedQuiz) return;
+
+  const answers = {};
+  for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
+    const selected = document.querySelector(`input[name="mcq${i}"]:checked`);
+    answers[`mcq${i}`] = selected ? selected.value : '';
+  }
+  for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
+    answers[`open${i}`] = document.getElementById(`open${i}`).value;
+  }
+  localStorage.setItem('quizAnswers', JSON.stringify(answers));
+  lastAnswers = { ...answers };
+  showStatus('Answers saved!');
 }
 
-function showAlert(type, message, autoHide) {
-  const alertDiv = document.createElement('div');
-  alertDiv.className = `alert alert-${type} alert-dismissible fade show animate__animated animate__fadeIn`;
-  alertDiv.role = 'alert';
-  alertDiv.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
-  document.body.appendChild(alertDiv);
-  if (autoHide) {
-    setTimeout(() => alertDiv.classList.remove('show'), 5000);
-    setTimeout(() => alertDiv.remove(), 5500);
+function loadAnswers() {
+  const saved = localStorage.getItem('quizAnswers');
+  if (saved) {
+    const answers = JSON.parse(saved);
+    Object.keys(answers).forEach(key => {
+      if (key.startsWith('mcq')) {
+        const radio = document.querySelector(`input[name="${key}"][value="${answers[key]}"]`);
+        if (radio) radio.checked = true;
+      } else if (key.startsWith('open')) {
+        const textarea = document.getElementById(key);
+        if (textarea) textarea.value = answers[key];
+      }
+    });
+    lastAnswers = { ...answers };
   }
 }
 
-let saveTimeout;
-function saveConfig() {
-  clearTimeout(saveTimeout);
-  const config = {
-    book: document.getElementById('bookName').value,
-    chapters: document.getElementById('chapters').value,
-    ageRange: document.getElementById('ageRange').value,
-    useGeneric: document.getElementById('useGeneric').checked
-  };
-  localStorage.setItem('quizConfig', JSON.stringify(config));
-  saveTimeout = setTimeout(saveConfig, 30000);
+// Mic setup
+function setupMicButtons(numMcq, numOpen) {
+  if (!SpeechRecognition) {
+    for (let i = 1; i <= numOpen; i++) {
+      const qNum = numMcq + i;
+      const btn = document.getElementById(`micBtn${qNum}`);
+      btn.disabled = true;
+      btn.textContent = '🎤 Not Supported';
+      btn.style.backgroundColor = '#6c757d';
+    }
+    return;
+  }
+
+  for (let i = 1; i <= numOpen; i++) {
+    const qNum = numMcq + i;
+    const btn = document.getElementById(`micBtn${qNum}`);
+    btn.addEventListener('click', () => {
+      if (activeMic === i.toString()) {
+        recognition.stop();
+        btn.textContent = '🎤 Start Speaking';
+        btn.classList.remove('recording');
+        activeMic = null;
+      } else {
+        if (activeMic) {
+          recognition.stop();
+          const prevBtn = document.getElementById(`micBtn${numMcq + parseInt(activeMic)}`);
+          prevBtn.textContent = '🎤 Start Speaking';
+          prevBtn.classList.remove('recording');
+        }
+        activeMic = i.toString();
+        btn.textContent = '🎤 Stop Speaking';
+        btn.classList.add('recording');
+        recognition.start();
+      }
+    });
+  }
 }
 
-document.getElementById('bookName').addEventListener('input', saveConfig);
-document.getElementById('chapters').addEventListener('input', saveConfig);
-document.getElementById('ageRange').addEventListener('change', saveConfig);
-document.getElementById('useGeneric').addEventListener('change', saveConfig);
-
-window.addEventListener('load', () => {
-  const savedConfig = localStorage.getItem('quizConfig');
-  if (savedConfig) {
-    const config = JSON.parse(savedConfig);
-    document.getElementById('bookName').value = config.book || '';
-    document.getElementById('chapters').value = config.chapters || '';
-    document.getElementById('ageRange').value = config.ageRange || '';
-    document.getElementById('useGeneric').checked = config.useGeneric || false;
+// Submit quiz
+document.getElementById('quizForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (activeMic) {
+    recognition.stop();
+    const btn = document.getElementById(`micBtn${activeMic}`);
+    btn.textContent = '🎤 Start Speaking';
+    btn.classList.remove('recording');
+    activeMic = null;
   }
+
+  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
+  if (!savedQuiz) return alert('No quiz generated.');
+
+  const answers = {};
+  for (let i = 1; i <= savedQuiz.mcqs.length; i++) {
+    answers[`mcq${i}`] = document.querySelector(`input[name="mcq${i}"]:checked`)?.value || '';
+  }
+  for (let i = 1; i <= savedQuiz.openEnded.length; i++) {
+    answers[`open${i}`] = document.getElementById(`open${i}`).value;
+  }
+
+  showLoading('Evaluating answers...');
+  try {
+    const res = await fetch('/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcqs: savedQuiz.mcqs, openEnded: savedQuiz.openEnded, answers, ageRange: savedQuiz.ageRange })
+    });
+    const data = await res.json();
+    hideLoading();
+    document.getElementById('feedback').innerHTML = data.feedback;
+    document.getElementById('score').innerHTML = `<strong>${data.score}</strong>`;
+    document.getElementById('results').style.backgroundImage = `url(${savedQuiz.backgroundUrl})`;
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('quizSection').style.display = 'none';
+    localStorage.removeItem('quizAnswers');
+  } catch (error) {
+    hideLoading();
+    showStatus('Failed to submit quiz.', '#dc3545');
+  }
+});
+
+// Reset quiz answers
+document.getElementById('resetQuizBtn').addEventListener('click', () => {
+  const savedQuiz = JSON.parse(localStorage.getItem('generatedQuiz'));
+  if (!savedQuiz) return alert('No quiz to reset.');
+  document.querySelectorAll('input[type="radio"]').forEach(radio => radio.checked = false);
+  document.querySelectorAll('textarea').forEach(textarea => textarea.value = '');
+  localStorage.removeItem('quizAnswers');
+  lastAnswers = {};
+  showStatus('Quiz answers reset.');
+});
+
+// Back to search
+document.getElementById('backBtn').addEventListener('click', () => {
+  localStorage.removeItem('generatedQuiz');
+  localStorage.removeItem('quizAnswers');
+  document.getElementById('inputSection').style.display = 'block';
+  document.getElementById('quizSection').style.display = 'none';
+  document.getElementById('results').style.display = 'none';
+  hideLoading();
+  showStatus('Returned to search.');
+});
+
+// Start new quiz
+document.getElementById('startNewBtn').addEventListener('click', () => {
+  localStorage.removeItem('generatedQuiz');
+  localStorage.removeItem('quizAnswers');
+  document.getElementById('inputSection').style.display = 'block';
+  document.getElementById('quizSection').style.display = 'none';
+  document.getElementById('results').style.display = 'none';
+  hideLoading();
+  showStatus('Ready for new quiz.');
+});
+
+// On load
+document.addEventListener('DOMContentLoaded', () => {
+  loadConfig();
+  const inputs = document.querySelectorAll('#inputForm input, #inputForm select');
+  inputs.forEach(input => input.addEventListener('input', saveConfig));
+  const savedQuiz = localStorage.getItem('generatedQuiz');
+  if (savedQuiz) {
+    const data = JSON.parse(savedQuiz);
+    renderQuiz(data.mcqs, data.openEnded, data.isBookKnown ? null : `Book not found, using generic questions.`, data.backgroundUrl);
+    document.getElementById('inputSection').style.display = 'none';
+    document.getElementById('quizSection').style.display = 'block';
+    loadAnswers();
+  }
+  startAutosave();
 });
