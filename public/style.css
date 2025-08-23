@@ -25,6 +25,7 @@ h1 {
     padding: 20px;
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    min-height: 400px;
 }
 .question {
     margin-bottom: 20px;
@@ -160,6 +161,14 @@ textarea {
     background-color: #fff3cd;
     border-color: #ffeeba;
     color: #856404;
+    border-radius: 5px;
+}
+.alert-info {
+    margin-bottom: 20px;
+    padding: 10px;
+    background-color: #d1ecf1;
+    border-color: #bee5eb;
+    color: #0c5460;
     border-radius: 5px;
 }
 .form-control {
